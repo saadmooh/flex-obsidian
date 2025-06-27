@@ -7,6 +7,10 @@ interface ReminderPluginSettings {
 	enableNotifications: boolean;
 	userTimezone: string;
 	language: string;
+	enableAutoSync: boolean;
+	syncIntervalMinutes: number;
+	enableSoundNotifications: boolean;
+	maxRetries: number;
 }
 
 const DEFAULT_SETTINGS: ReminderPluginSettings = {
@@ -15,7 +19,11 @@ const DEFAULT_SETTINGS: ReminderPluginSettings = {
 	defaultReminderMinutes: 5,
 	enableNotifications: true,
 	userTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-	language: 'ar'
+	language: 'ar',
+	enableAutoSync: true,
+	syncIntervalMinutes: 30,
+	enableSoundNotifications: false,
+	maxRetries: 3
 }
 
 interface ReminderData {
@@ -29,6 +37,11 @@ interface ReminderData {
 	category?: string;
 	complexity?: string;
 	domain?: string;
+	content?: string;
+	imageUrl?: string;
+	preferredTimes?: string;
+	createdAt?: Date;
+	lastSynced?: Date;
 }
 
 interface ApiResponse {
@@ -39,12 +52,33 @@ interface ApiResponse {
 	nextReminderTime?: string;
 	is_playlist?: boolean;
 	video_belongs_to_playlist?: boolean;
+	category?: string;
+	complexity?: string;
+	domain?: string;
+	content?: string;
+	image_url?: string;
+	preferred_times?: string;
+}
+
+interface SyncStatus {
+	isOnline: boolean;
+	lastSyncTime: Date | null;
+	pendingChanges: number;
+	syncInProgress: boolean;
 }
 
 export default class ReminderPlugin extends Plugin {
 	settings: ReminderPluginSettings;
 	activeReminders: Map<string, NodeJS.Timeout> = new Map();
 	reminderStorage: ReminderData[] = [];
+	syncStatus: SyncStatus = {
+		isOnline: true,
+		lastSyncTime: null,
+		pendingChanges: 0,
+		syncInProgress: false
+	};
+	statusBarItem: HTMLElement | null = null;
+	syncInterval: number | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -57,9 +91,35 @@ export default class ReminderPlugin extends Plugin {
 		ribbonIconEl.addClass('reminder-plugin-ribbon-class');
 
 		// إضافة عنصر في شريط الحالة
-		const statusBarItemEl = this.addStatusBarItem();
-		this.updateStatusBar(statusBarItemEl);
+		this.statusBarItem = this.addStatusBarItem();
+		this.updateStatusBar();
 
+		// إضافة الأوامر
+		this.addCommands();
+
+		// إضافة تبويب الإعدادات
+		this.addSettingTab(new ReminderSettingTab(this.app, this));
+
+		// استعادة التذكيرات النشطة عند تحميل البرنامج
+		this.restoreActiveReminders();
+
+		// بدء المزامنة التلقائية
+		this.startAutoSync();
+
+		// فحص الاتصال بالإنترنت
+		this.checkConnectivity();
+	}
+
+	onunload() {
+		// إلغاء جميع التذكيرات النشطة
+		this.activeReminders.forEach(timeout => clearTimeout(timeout));
+		this.activeReminders.clear();
+
+		// إيقاف المزامنة التلقائية
+		this.stopAutoSync();
+	}
+
+	private addCommands() {
 		// إضافة أمر لفتح نافذة إضافة تذكير
 		this.addCommand({
 			id: 'add-link-reminder',
@@ -85,7 +145,6 @@ export default class ReminderPlugin extends Plugin {
 			editorCallback: (editor: Editor, view: MarkdownView) => {
 				const selection = editor.getSelection();
 				if (selection) {
-					// البحث عن رابط في النص المحدد
 					const urlRegex = /(https?:\/\/[^\s]+)/g;
 					const match = selection.match(urlRegex);
 					if (match && match[0]) {
@@ -108,22 +167,23 @@ export default class ReminderPlugin extends Plugin {
 			}
 		});
 
-		// إضافة تبويب الإعدادات
-		this.addSettingTab(new ReminderSettingTab(this.app, this));
+		// إضافة أمر لعرض إحصائيات التذكيرات
+		this.addCommand({
+			id: 'view-reminder-stats',
+			name: 'عرض إحصائيات التذكيرات',
+			callback: () => {
+				new ReminderStatsModal(this.app, this).open();
+			}
+		});
 
-		// استعادة التذكيرات النشطة عند تحميل البرنامج
-		this.restoreActiveReminders();
-
-		// مزامنة دورية كل 30 دقيقة
-		this.registerInterval(window.setInterval(() => {
-			this.syncRemindersWithApi();
-		}, 30 * 60 * 1000));
-	}
-
-	onunload() {
-		// إلغاء جميع التذكيرات النشطة
-		this.activeReminders.forEach(timeout => clearTimeout(timeout));
-		this.activeReminders.clear();
+		// إضافة أمر للبحث في التذكيرات
+		this.addCommand({
+			id: 'search-reminders',
+			name: 'البحث في التذكيرات',
+			callback: () => {
+				new SearchRemindersModal(this.app, this).open();
+			}
+		});
 	}
 
 	async loadSettings() {
@@ -136,7 +196,12 @@ export default class ReminderPlugin extends Plugin {
 
 	async loadReminders() {
 		const data = await this.loadData();
-		this.reminderStorage = data?.reminders || [];
+		this.reminderStorage = (data?.reminders || []).map((reminder: any) => ({
+			...reminder,
+			reminderTime: new Date(reminder.reminderTime),
+			createdAt: reminder.createdAt ? new Date(reminder.createdAt) : new Date(),
+			lastSynced: reminder.lastSynced ? new Date(reminder.lastSynced) : null
+		}));
 	}
 
 	async saveReminders() {
@@ -145,32 +210,59 @@ export default class ReminderPlugin extends Plugin {
 		await this.saveData(data);
 	}
 
+	private async makeApiRequest(endpoint: string, method: string = 'GET', body?: any): Promise<any> {
+		const maxRetries = this.settings.maxRetries;
+		let lastError: Error | null = null;
+
+		for (let attempt = 1; attempt <= maxRetries; attempt++) {
+			try {
+				const response = await fetch(`${this.settings.apiBaseUrl}/${endpoint}`, {
+					method,
+					headers: {
+						'Content-Type': 'application/json',
+						'Authorization': `Bearer ${this.settings.apiPassword}`,
+						'Accept': 'application/json'
+					},
+					body: body ? JSON.stringify(body) : undefined
+				});
+
+				if (!response.ok) {
+					throw new Error(`HTTP error! status: ${response.status}`);
+				}
+
+				const data = await response.json();
+				this.syncStatus.isOnline = true;
+				return data;
+			} catch (error) {
+				lastError = error instanceof Error ? error : new Error('خطأ غير معروف');
+				
+				if (attempt === maxRetries) {
+					this.syncStatus.isOnline = false;
+					console.error(`فشل في الطلب بعد ${maxRetries} محاولات:`, lastError);
+					break;
+				}
+				
+				// انتظار قبل المحاولة التالية
+				await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+			}
+		}
+
+		throw lastError || new Error('فشل في الاتصال بالخادم');
+	}
+
 	async sendUrlToApi(url: string, importance: string = 'day'): Promise<ApiResponse> {
 		try {
 			const timezoneOffset = new Date().getTimezoneOffset().toString();
 			
-			const response = await fetch(`${this.settings.apiBaseUrl}/savePost`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${this.settings.apiPassword}`,
-					'Accept': 'application/json'
-				},
-				body: JSON.stringify({ 
-					url,
-					importance_en: importance,
-					importance_ar: this.getImportanceArabic(importance),
-					timezone_offset: timezoneOffset,
-					timezone_name: this.settings.userTimezone,
-					api: 'obsidian'
-				})
+			const data = await this.makeApiRequest('savePost', 'POST', {
+				url,
+				importance_en: importance,
+				importance_ar: this.getImportanceArabic(importance),
+				timezone_offset: timezoneOffset,
+				timezone_name: this.settings.userTimezone,
+				api: 'obsidian'
 			});
 
-			if (!response.ok) {
-				throw new Error(`HTTP error! status: ${response.status}`);
-			}
-
-			const data = await response.json();
 			return data;
 		} catch (error) {
 			console.error('خطأ في إرسال الرابط إلى API:', error);
@@ -185,26 +277,13 @@ export default class ReminderPlugin extends Plugin {
 		try {
 			const timezoneOffset = new Date().getTimezoneOffset().toString();
 			
-			const response = await fetch(`${this.settings.apiBaseUrl}/updateReminder`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${this.settings.apiPassword}`,
-					'Accept': 'application/json'
-				},
-				body: JSON.stringify({
-					id: apiId,
-					next_reminder_time: newTime.toISOString(),
-					timezone_offset: timezoneOffset,
-					timezone_name: this.settings.userTimezone
-				})
+			const data = await this.makeApiRequest('updateReminder', 'POST', {
+				id: apiId,
+				next_reminder_time: newTime.toISOString(),
+				timezone_offset: timezoneOffset,
+				timezone_name: this.settings.userTimezone
 			});
 
-			if (!response.ok) {
-				throw new Error(`HTTP error! status: ${response.status}`);
-			}
-
-			const data = await response.json();
 			return data.success;
 		} catch (error) {
 			console.error('خطأ في تحديث وقت التذكير:', error);
@@ -214,19 +293,7 @@ export default class ReminderPlugin extends Plugin {
 
 	async deleteReminderFromApi(apiId: number): Promise<boolean> {
 		try {
-			const response = await fetch(`${this.settings.apiBaseUrl}/deleteReminder/${apiId}`, {
-				method: 'DELETE',
-				headers: {
-					'Authorization': `Bearer ${this.settings.apiPassword}`,
-					'Accept': 'application/json'
-				}
-			});
-
-			if (!response.ok) {
-				throw new Error(`HTTP error! status: ${response.status}`);
-			}
-
-			const data = await response.json();
+			const data = await this.makeApiRequest(`deleteReminder/${apiId}`, 'DELETE');
 			return data.success;
 		} catch (error) {
 			console.error('خطأ في حذف التذكير من API:', error);
@@ -235,41 +302,58 @@ export default class ReminderPlugin extends Plugin {
 	}
 
 	async syncRemindersWithApi(): Promise<void> {
+		if (this.syncStatus.syncInProgress) {
+			return;
+		}
+
+		this.syncStatus.syncInProgress = true;
+		this.updateStatusBar();
+
 		try {
-			const response = await fetch(`${this.settings.apiBaseUrl}/getReminders`, {
-				method: 'GET',
-				headers: {
-					'Authorization': `Bearer ${this.settings.apiPassword}`,
-					'Accept': 'application/json'
-				}
-			});
-
-			if (!response.ok) {
-				throw new Error(`HTTP error! status: ${response.status}`);
-			}
-
-			const data = await response.json();
+			const data = await this.makeApiRequest('getReminders');
+			
 			if (data.success && data.reminders) {
-				// تحديث التذكيرات المحلية بناءً على البيانات من الخادم
 				this.updateLocalRemindersFromApi(data.reminders);
+				this.syncStatus.lastSyncTime = new Date();
+				this.syncStatus.pendingChanges = 0;
+				
+				if (this.settings.enableNotifications) {
+					new Notice('تم تحديث التذكيرات بنجاح');
+				}
 			}
 		} catch (error) {
 			console.error('خطأ في مزامنة التذكيرات:', error);
+			if (this.settings.enableNotifications) {
+				new Notice('فشل في مزامنة التذكيرات - سيتم المحاولة لاحقاً');
+			}
+		} finally {
+			this.syncStatus.syncInProgress = false;
+			this.updateStatusBar();
 		}
 	}
 
 	private updateLocalRemindersFromApi(apiReminders: any[]) {
-		// تحديث التذكيرات الموجودة وإضافة الجديدة
+		const updatedIds = new Set<number>();
+
 		apiReminders.forEach(apiReminder => {
+			updatedIds.add(apiReminder.id);
 			const existingIndex = this.reminderStorage.findIndex(r => r.apiId === apiReminder.id);
 			
 			if (existingIndex !== -1) {
 				// تحديث التذكير الموجود
-				this.reminderStorage[existingIndex].reminderTime = new Date(apiReminder.next_reminder_time);
-				this.reminderStorage[existingIndex].title = apiReminder.title;
-				this.reminderStorage[existingIndex].category = apiReminder.category;
-				this.reminderStorage[existingIndex].complexity = apiReminder.complexity;
-				this.reminderStorage[existingIndex].domain = apiReminder.domain;
+				const existing = this.reminderStorage[existingIndex];
+				this.reminderStorage[existingIndex] = {
+					...existing,
+					reminderTime: new Date(apiReminder.next_reminder_time),
+					title: apiReminder.title,
+					category: apiReminder.category,
+					complexity: apiReminder.complexity,
+					domain: apiReminder.domain,
+					content: apiReminder.content,
+					imageUrl: apiReminder.image_url,
+					preferredTimes: apiReminder.preferred_times,
+					lastSynced: new Date()
+				};
 			} else {
 				// إضافة تذكير جديد
 				const newReminder: ReminderData = {
@@ -282,10 +366,29 @@ export default class ReminderPlugin extends Plugin {
 					importance: apiReminder.importance,
 					category: apiReminder.category,
 					complexity: apiReminder.complexity,
-					domain: apiReminder.domain
+					domain: apiReminder.domain,
+					content: apiReminder.content,
+					imageUrl: apiReminder.image_url,
+					preferredTimes: apiReminder.preferred_times,
+					createdAt: new Date(),
+					lastSynced: new Date()
 				};
 				this.reminderStorage.push(newReminder);
 			}
+		});
+
+		// إزالة التذكيرات التي لم تعد موجودة على الخادم
+		this.reminderStorage = this.reminderStorage.filter(reminder => {
+			if (reminder.apiId && !updatedIds.has(reminder.apiId)) {
+				// إلغاء التذكير المحلي
+				const timeout = this.activeReminders.get(reminder.id);
+				if (timeout) {
+					clearTimeout(timeout);
+					this.activeReminders.delete(reminder.id);
+				}
+				return false;
+			}
+			return true;
 		});
 
 		this.saveReminders();
@@ -309,7 +412,15 @@ export default class ReminderPlugin extends Plugin {
 			reminderTime: apiResponse.nextReminderTime ? new Date(apiResponse.nextReminderTime) : reminderTime,
 			isActive: true,
 			apiId: apiResponse.id,
-			importance
+			importance,
+			category: apiResponse.category,
+			complexity: apiResponse.complexity,
+			domain: apiResponse.domain,
+			content: apiResponse.content,
+			imageUrl: apiResponse.image_url,
+			preferredTimes: apiResponse.preferred_times,
+			createdAt: new Date(),
+			lastSynced: new Date()
 		};
 
 		this.reminderStorage.push(reminderData);
@@ -327,12 +438,18 @@ export default class ReminderPlugin extends Plugin {
 			this.activeReminders.set(reminderId, timeout);
 		}
 
+		this.updateStatusBar();
 		return reminderId;
 	}
 
 	triggerReminder(reminder: ReminderData) {
 		if (this.settings.enableNotifications) {
 			new Notice(`🔔 تذكير: ${reminder.title}`, 10000);
+		}
+
+		// تشغيل صوت إذا كان مفعلاً
+		if (this.settings.enableSoundNotifications) {
+			this.playNotificationSound();
 		}
 
 		// فتح نافذة التذكير
@@ -346,6 +463,20 @@ export default class ReminderPlugin extends Plugin {
 		if (index !== -1) {
 			this.reminderStorage[index].isActive = false;
 			this.saveReminders();
+		}
+
+		this.updateStatusBar();
+	}
+
+	private playNotificationSound() {
+		try {
+			const audio = new Audio();
+			audio.src = 'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT';
+			audio.play().catch(() => {
+				// تجاهل الأخطاء في تشغيل الصوت
+			});
+		} catch (error) {
+			// تجاهل الأخطاء في تشغيل الصوت
 		}
 	}
 
@@ -368,6 +499,8 @@ export default class ReminderPlugin extends Plugin {
 			this.reminderStorage[index].isActive = false;
 			this.saveReminders();
 		}
+
+		this.updateStatusBar();
 	}
 
 	async snoozeReminder(reminder: ReminderData, minutes: number = 5) {
@@ -387,7 +520,8 @@ export default class ReminderPlugin extends Plugin {
 			...reminder,
 			id: newReminderId,
 			reminderTime: snoozeTime,
-			isActive: true
+			isActive: true,
+			lastSynced: new Date()
 		};
 
 		this.reminderStorage.push(newReminder);
@@ -400,10 +534,54 @@ export default class ReminderPlugin extends Plugin {
 
 		this.activeReminders.set(newReminderId, timeout);
 		new Notice(`تم تأجيل التذكير لمدة ${minutes} دقيقة`);
+		this.updateStatusBar();
 	}
 
 	getActiveReminders(): ReminderData[] {
 		return this.reminderStorage.filter(r => r.isActive);
+	}
+
+	getAllReminders(): ReminderData[] {
+		return this.reminderStorage;
+	}
+
+	searchReminders(query: string): ReminderData[] {
+		const lowerQuery = query.toLowerCase();
+		return this.reminderStorage.filter(reminder => 
+			reminder.title.toLowerCase().includes(lowerQuery) ||
+			reminder.url.toLowerCase().includes(lowerQuery) ||
+			reminder.category?.toLowerCase().includes(lowerQuery) ||
+			reminder.domain?.toLowerCase().includes(lowerQuery) ||
+			reminder.content?.toLowerCase().includes(lowerQuery)
+		);
+	}
+
+	getReminderStats() {
+		const total = this.reminderStorage.length;
+		const active = this.getActiveReminders().length;
+		const completed = total - active;
+		
+		const categories = [...new Set(this.reminderStorage.map(r => r.category).filter(Boolean))];
+		const domains = [...new Set(this.reminderStorage.map(r => r.domain).filter(Boolean))];
+		const complexities = [...new Set(this.reminderStorage.map(r => r.complexity).filter(Boolean))];
+
+		const importanceStats = {
+			day: this.reminderStorage.filter(r => r.importance === 'day').length,
+			week: this.reminderStorage.filter(r => r.importance === 'week').length,
+			month: this.reminderStorage.filter(r => r.importance === 'month').length
+		};
+
+		return {
+			total,
+			active,
+			completed,
+			categories,
+			domains,
+			complexities,
+			importanceStats,
+			lastSyncTime: this.syncStatus.lastSyncTime,
+			isOnline: this.syncStatus.isOnline
+		};
 	}
 
 	private restoreActiveReminders() {
@@ -422,14 +600,46 @@ export default class ReminderPlugin extends Plugin {
 				this.activeReminders.set(reminder.id, timeout);
 			}
 		});
+
+		this.updateStatusBar();
 	}
 
-	private updateStatusBar(statusBarItem: HTMLElement) {
+	private updateStatusBar() {
+		if (!this.statusBarItem) return;
+
 		const activeCount = this.getActiveReminders().length;
-		statusBarItem.setText(`🔔 ${activeCount} تذكير نشط`);
+		const syncIcon = this.syncStatus.syncInProgress ? '🔄' : 
+						this.syncStatus.isOnline ? '🟢' : '🔴';
+		
+		this.statusBarItem.setText(`${syncIcon} 🔔 ${activeCount} تذكير نشط`);
 		
 		// تحديث كل دقيقة
-		setTimeout(() => this.updateStatusBar(statusBarItem), 60000);
+		setTimeout(() => this.updateStatusBar(), 60000);
+	}
+
+	private startAutoSync() {
+		if (!this.settings.enableAutoSync) return;
+
+		this.syncInterval = window.setInterval(() => {
+			this.syncRemindersWithApi();
+		}, this.settings.syncIntervalMinutes * 60 * 1000);
+	}
+
+	private stopAutoSync() {
+		if (this.syncInterval) {
+			window.clearInterval(this.syncInterval);
+			this.syncInterval = null;
+		}
+	}
+
+	private async checkConnectivity() {
+		try {
+			await this.makeApiRequest('getUser');
+			this.syncStatus.isOnline = true;
+		} catch (error) {
+			this.syncStatus.isOnline = false;
+		}
+		this.updateStatusBar();
 	}
 
 	private generateId(): string {
@@ -446,440 +656,4 @@ export default class ReminderPlugin extends Plugin {
 	}
 }
 
-class LinkReminderModal extends Modal {
-	plugin: ReminderPlugin;
-	initialUrl: string;
-
-	constructor(app: App, plugin: ReminderPlugin, initialUrl?: string) {
-		super(app);
-		this.plugin = plugin;
-		this.initialUrl = initialUrl || '';
-	}
-
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.empty();
-
-		contentEl.createEl('h2', { text: 'إضافة تذكير من رابط' });
-
-		// حقل إدخال الرابط
-		const urlContainer = contentEl.createDiv('reminder-input-container');
-		urlContainer.createEl('label', { text: 'الرابط:' });
-		const urlInput = urlContainer.createEl('input', {
-			type: 'text',
-			placeholder: 'https://example.com',
-			value: this.initialUrl
-		});
-		urlInput.addClass('reminder-url-input');
-
-		// حقل العنوان (اختياري)
-		const titleContainer = contentEl.createDiv('reminder-input-container');
-		titleContainer.createEl('label', { text: 'العنوان (اختياري):' });
-		const titleInput = titleContainer.createEl('input', {
-			type: 'text',
-			placeholder: 'عنوان التذكير'
-		});
-		titleInput.addClass('reminder-title-input');
-
-		// حقل الأهمية
-		const importanceContainer = contentEl.createDiv('reminder-input-container');
-		importanceContainer.createEl('label', { text: 'الأهمية:' });
-		const importanceSelect = importanceContainer.createEl('select');
-		importanceSelect.addClass('reminder-importance-select');
-		
-		const importanceOptions = [
-			{ value: 'day', text: 'يومي' },
-			{ value: 'week', text: 'أسبوعي' },
-			{ value: 'month', text: 'شهري' }
-		];
-		
-		importanceOptions.forEach(option => {
-			const optionEl = importanceSelect.createEl('option', { 
-				value: option.value, 
-				text: option.text 
-			});
-		});
-
-		// حقل الوقت المخصص (اختياري)
-		const timeContainer = contentEl.createDiv('reminder-input-container');
-		timeContainer.createEl('label', { text: 'وقت مخصص (اختياري):' });
-		const timeInput = timeContainer.createEl('input', {
-			type: 'datetime-local'
-		});
-		timeInput.addClass('reminder-time-input');
-
-		// أزرار العمل
-		const buttonContainer = contentEl.createDiv('reminder-button-container');
-		
-		const createButton = buttonContainer.createEl('button', { text: 'إنشاء تذكير' });
-		createButton.addClass('mod-cta');
-		createButton.onclick = async () => {
-			await this.handleCreateReminder(
-				urlInput.value, 
-				titleInput.value, 
-				timeInput.value,
-				importanceSelect.value
-			);
-		};
-
-		const cancelButton = buttonContainer.createEl('button', { text: 'إلغاء' });
-		cancelButton.onclick = () => this.close();
-
-		// التركيز على حقل الرابط
-		urlInput.focus();
-	}
-
-	async handleCreateReminder(url: string, customTitle: string, customTime: string, importance: string) {
-		if (!url.trim()) {
-			new Notice('يرجى إدخال رابط صحيح');
-			return;
-		}
-
-		// التحقق من صحة الرابط
-		try {
-			new URL(url);
-		} catch {
-			new Notice('الرابط المدخل غير صحيح');
-			return;
-		}
-
-		// عرض رسالة تحميل
-		const loadingNotice = new Notice('جاري معالجة الرابط...', 0);
-
-		try {
-			let reminderTime: Date;
-			let title: string;
-
-			if (customTime) {
-				// استخدام الوقت المخصص
-				reminderTime = new Date(customTime);
-				title = customTitle || 'تذكير مخصص';
-				
-				// التحقق من أن الوقت في المستقبل
-				if (reminderTime <= new Date()) {
-					throw new Error('وقت التذكير يجب أن يكون في المستقبل');
-				}
-
-				// إنشاء التذكير مع الوقت المخصص
-				const reminderId = await this.plugin.createReminder(url, title, reminderTime, importance);
-			} else {
-				// إنشاء التذكير باستخدام API
-				const reminderId = await this.plugin.createReminder(
-					url, 
-					customTitle || 'تذكير من رابط', 
-					new Date(), 
-					importance
-				);
-			}
-
-			loadingNotice.hide();
-			new Notice('تم إنشاء التذكير بنجاح!');
-			
-			this.close();
-		} catch (error) {
-			loadingNotice.hide();
-			new Notice(`خطأ: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
-		}
-	}
-
-	onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
-	}
-}
-
-class ActiveRemindersModal extends Modal {
-	plugin: ReminderPlugin;
-
-	constructor(app: App, plugin: ReminderPlugin) {
-		super(app);
-		this.plugin = plugin;
-	}
-
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.empty();
-
-		contentEl.createEl('h2', { text: 'التذكيرات النشطة' });
-
-		const activeReminders = this.plugin.getActiveReminders();
-
-		if (activeReminders.length === 0) {
-			contentEl.createEl('p', { text: 'لا توجد تذكيرات نشطة حالياً' });
-			
-			// زر لمزامنة التذكيرات
-			const syncButton = contentEl.createEl('button', { text: 'مزامنة مع الخادم' });
-			syncButton.addClass('mod-cta');
-			syncButton.onclick = async () => {
-				const loadingNotice = new Notice('جاري المزامنة...', 0);
-				await this.plugin.syncRemindersWithApi();
-				loadingNotice.hide();
-				new Notice('تم تحديث التذكيرات');
-				this.onOpen(); // إعادة تحديث القائمة
-			};
-			
-			return;
-		}
-
-		const remindersList = contentEl.createDiv('reminders-list');
-
-		activeReminders.forEach(reminder => {
-			const reminderItem = remindersList.createDiv('reminder-item');
-			
-			const reminderInfo = reminderItem.createDiv('reminder-info');
-			reminderInfo.createEl('h3', { text: reminder.title });
-			reminderInfo.createEl('p', { text: `الرابط: ${reminder.url}` });
-			reminderInfo.createEl('p', { text: `الوقت: ${new Date(reminder.reminderTime).toLocaleString('ar')}` });
-			
-			if (reminder.importance) {
-				reminderInfo.createEl('p', { text: `الأهمية: ${this.plugin.getImportanceArabic(reminder.importance)}` });
-			}
-			
-			if (reminder.category) {
-				reminderInfo.createEl('p', { text: `الفئة: ${reminder.category}` });
-			}
-
-			const reminderActions = reminderItem.createDiv('reminder-actions');
-			
-			const openButton = reminderActions.createEl('button', { text: 'فتح الرابط' });
-			openButton.onclick = () => {
-				window.open(reminder.url, '_blank');
-			};
-
-			const snoozeButton = reminderActions.createEl('button', { text: 'تأجيل 5 دقائق' });
-			snoozeButton.onclick = async () => {
-				await this.plugin.snoozeReminder(reminder, 5);
-				this.onOpen(); // إعادة تحديث القائمة
-			};
-
-			const cancelButton = reminderActions.createEl('button', { text: 'إلغاء التذكير' });
-			cancelButton.addClass('mod-warning');
-			cancelButton.onclick = async () => {
-				await this.plugin.cancelReminder(reminder.id);
-				new Notice('تم إلغاء التذكير');
-				this.onOpen(); // إعادة تحديث القائمة
-			};
-		});
-
-		// زر مزامنة في الأسفل
-		const syncContainer = contentEl.createDiv('reminder-sync-container');
-		const syncButton = syncContainer.createEl('button', { text: 'مزامنة مع الخادم' });
-		syncButton.onclick = async () => {
-			const loadingNotice = new Notice('جاري المزامنة...', 0);
-			await this.plugin.syncRemindersWithApi();
-			loadingNotice.hide();
-			new Notice('تم تحديث التذكيرات');
-			this.onOpen(); // إعادة تحديث القائمة
-		};
-	}
-
-	onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
-	}
-}
-
-class ReminderNotificationModal extends Modal {
-	reminder: ReminderData;
-	plugin: ReminderPlugin;
-
-	constructor(app: App, reminder: ReminderData, plugin: ReminderPlugin) {
-		super(app);
-		this.reminder = reminder;
-		this.plugin = plugin;
-	}
-
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.empty();
-
-		contentEl.addClass('reminder-notification-modal');
-
-		const header = contentEl.createDiv('reminder-notification-header');
-		header.createEl('h1', { text: '🔔 تذكير!' });
-
-		const content = contentEl.createDiv('reminder-notification-content');
-		content.createEl('h2', { text: this.reminder.title });
-		content.createEl('p', { text: `الرابط: ${this.reminder.url}` });
-		content.createEl('p', { text: `الوقت: ${new Date(this.reminder.reminderTime).toLocaleString('ar')}` });
-		
-		if (this.reminder.category) {
-			content.createEl('p', { text: `الفئة: ${this.reminder.category}` });
-		}
-		
-		if (this.reminder.complexity) {
-			content.createEl('p', { text: `التعقيد: ${this.reminder.complexity}` });
-		}
-
-		const actions = contentEl.createDiv('reminder-notification-actions');
-		
-		const openButton = actions.createEl('button', { text: 'فتح الرابط' });
-		openButton.addClass('mod-cta');
-		openButton.onclick = () => {
-			window.open(this.reminder.url, '_blank');
-			this.close();
-		};
-
-		const snooze5Button = actions.createEl('button', { text: 'تأجيل 5 دقائق' });
-		snooze5Button.onclick = async () => {
-			await this.plugin.snoozeReminder(this.reminder, 5);
-			this.close();
-		};
-
-		const snooze15Button = actions.createEl('button', { text: 'تأجيل 15 دقيقة' });
-		snooze15Button.onclick = async () => {
-			await this.plugin.snoozeReminder(this.reminder, 15);
-			this.close();
-		};
-
-		const snooze60Button = actions.createEl('button', { text: 'تأجيل ساعة' });
-		snooze60Button.onclick = async () => {
-			await this.plugin.snoozeReminder(this.reminder, 60);
-			this.close();
-		};
-
-		const dismissButton = actions.createEl('button', { text: 'تجاهل' });
-		dismissButton.onclick = () => this.close();
-	}
-
-	onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
-	}
-}
-
-class ReminderSettingTab extends PluginSettingTab {
-	plugin: ReminderPlugin;
-
-	constructor(app: App, plugin: ReminderPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
-
-	display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
-
-		containerEl.createEl('h2', { text: 'إعدادات التذكيرات' });
-
-		new Setting(containerEl)
-			.setName('رابط API الأساسي')
-			.setDesc('الرابط الأساسي لـ API الخاص بك')
-			.addText(text => text
-				.setPlaceholder('https://flexreminder.com/api')
-				.setValue(this.plugin.settings.apiBaseUrl)
-				.onChange(async (value) => {
-					this.plugin.settings.apiBaseUrl = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-			.setName('كلمة مرور API')
-			.setDesc('كلمة المرور للوصول إلى API')
-			.addText(text => {
-				text.inputEl.type = 'password';
-				text.setPlaceholder('كلمة مرور API')
-					.setValue(this.plugin.settings.apiPassword)
-					.onChange(async (value) => {
-						this.plugin.settings.apiPassword = value;
-						await this.plugin.saveSettings();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName('المنطقة الزمنية')
-			.setDesc('المنطقة الزمنية الخاصة بك')
-			.addText(text => text
-				.setPlaceholder('Asia/Riyadh')
-				.setValue(this.plugin.settings.userTimezone)
-				.onChange(async (value) => {
-					this.plugin.settings.userTimezone = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-			.setName('اللغة')
-			.setDesc('لغة واجهة التطبيق')
-			.addDropdown(dropdown => dropdown
-				.addOption('ar', 'العربية')
-				.addOption('en', 'English')
-				.addOption('zh', '中文')
-				.setValue(this.plugin.settings.language)
-				.onChange(async (value) => {
-					this.plugin.settings.language = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-			.setName('تفعيل الإشعارات')
-			.setDesc('عرض إشعارات عند تفعيل التذكيرات')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.enableNotifications)
-				.onChange(async (value) => {
-					this.plugin.settings.enableNotifications = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-			.setName('دقائق التذكير الافتراضية')
-			.setDesc('عدد الدقائق الافتراضي للتذكيرات المخصصة')
-			.addSlider(slider => slider
-				.setLimits(1, 60, 1)
-				.setValue(this.plugin.settings.defaultReminderMinutes)
-				.setDynamicTooltip()
-				.onChange(async (value) => {
-					this.plugin.settings.defaultReminderMinutes = value;
-					await this.plugin.saveSettings();
-				}));
-
-		// قسم إحصائيات
-		containerEl.createEl('h3', { text: 'الإحصائيات' });
-		
-		const activeReminders = this.plugin.getActiveReminders();
-		const totalReminders = this.plugin.reminderStorage.length;
-		
-		const statsContainer = containerEl.createDiv('reminder-stats');
-		statsContainer.createEl('p', { text: `التذكيرات النشطة: ${activeReminders.length}` });
-		statsContainer.createEl('p', { text: `إجمالي التذكيرات: ${totalReminders}` });
-
-		// زر مزامنة التذكيرات
-		new Setting(containerEl)
-			.setName('مزامنة التذكيرات')
-			.setDesc('مزامنة التذكيرات مع الخادم')
-			.addButton(button => button
-				.setButtonText('مزامنة الآن')
-				.onClick(async () => {
-					const loadingNotice = new Notice('جاري المزامنة...', 0);
-					await this.plugin.syncRemindersWithApi();
-					loadingNotice.hide();
-					new Notice('تم تحديث التذكيرات');
-					this.display(); // إعادة تحديث الصفحة
-				}));
-
-		// زر مسح جميع التذكيرات
-		new Setting(containerEl)
-			.setName('مسح جميع التذكيرات')
-			.setDesc('حذف جميع التذكيرات المحفوظة (لا يمكن التراجع)')
-			.addButton(button => button
-				.setButtonText('مسح الكل')
-				.setWarning()
-				.onClick(async () => {
-					if (confirm('هل أنت متأكد من حذف جميع التذكيرات؟ لا يمكن التراجع عن هذا الإجراء.')) {
-						// حذف من API أولاً
-						for (const reminder of this.plugin.reminderStorage) {
-							if (reminder.apiId) {
-								await this.plugin.deleteReminderFromApi(reminder.apiId);
-							}
-						}
-						
-						// حذف محلياً
-						this.plugin.activeReminders.forEach(timeout => clearTimeout(timeout));
-						this.plugin.activeReminders.clear();
-						this.plugin.reminderStorage = [];
-						await this.plugin.saveReminders();
-						new Notice('تم حذف جميع التذكيرات');
-						this.display(); // إعادة تحديث الصفحة
-					}
-				}));
-	}
-}
+// باقي الكلاسات ستكون في الملفات التالية...
