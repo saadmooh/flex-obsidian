@@ -1,94 +1,128 @@
-# Obsidian Sample Plugin
+# Obsidian Link Reminder Plugin
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+إضافة ذكية لـ Obsidian تتيح لك إنشاء تذكيرات من الروابط باستخدام API مخصص.
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+## الميزات
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open Sample Modal" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+### 🔗 معالجة الروابط الذكية
+- إرسال الروابط إلى API مخصص للحصول على أوقات التذكير المناسبة
+- استخراج العناوين والمعلومات تلقائياً من الروابط
+- دعم جميع أنواع الروابط (مواقع، مقالات، فيديوهات، إلخ)
 
-## First time developing plugins?
+### ⏰ إدارة التذكيرات
+- إنشاء تذكيرات تلقائية بناءً على استجابة API
+- إمكانية تحديد أوقات مخصصة للتذكيرات
+- عرض جميع التذكيرات النشطة في مكان واحد
+- إلغاء أو تأجيل التذكيرات بسهولة
 
-Quick starting guide for new plugin devs:
+### 🎯 واجهة مستخدم سهلة
+- أيقونة سريعة في الشريط الجانبي
+- أوامر لوحة المفاتيح للوصول السريع
+- إنشاء تذكيرات من النص المحدد
+- إشعارات واضحة ومفيدة
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+### 📊 إحصائيات ومتابعة
+- عداد التذكيرات النشطة في شريط الحالة
+- إحصائيات مفصلة في صفحة الإعدادات
+- حفظ تاريخ جميع التذكيرات
 
-## Releasing new releases
+## التثبيت
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+### التثبيت اليدوي
+1. قم بتحميل الملفات من هذا المستودع
+2. انسخ المجلد إلى `.obsidian/plugins/link-reminder-plugin/` في vault الخاص بك
+3. فعّل الإضافة من إعدادات Obsidian
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+### من مجتمع الإضافات
+سيتم إضافة الإضافة إلى مجتمع إضافات Obsidian قريباً.
 
-## Adding your plugin to the community plugin list
+## الإعداد
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+### إعداد API
+1. اذهب إلى إعدادات الإضافة
+2. أدخل رابط API الأساسي (افتراضي: `https://flexreminder.com/api`)
+3. أدخل كلمة مرور API
+4. احفظ الإعدادات
 
-## How to use
+### تخصيص الإعدادات
+- **تفعيل الإشعارات**: تشغيل/إيقاف إشعارات التذكير
+- **دقائق التذكير الافتراضية**: الوقت الافتراضي للتذكيرات المخصصة
 
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+## الاستخدام
 
-## Manually installing the plugin
+### إنشاء تذكير من رابط
+1. انقر على أيقونة الساعة في الشريط الجانبي
+2. أدخل الرابط المطلوب
+3. (اختياري) أدخل عنواناً مخصصاً
+4. (اختياري) حدد وقتاً مخصصاً
+5. انقر "إنشاء تذكير"
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+### إنشاء تذكير من النص المحدد
+1. حدد نصاً يحتوي على رابط
+2. استخدم الأمر "إنشاء تذكير من النص المحدد"
+3. ستفتح نافذة إنشاء التذكير مع الرابط محمّلاً مسبقاً
 
-## Improve code quality with eslint (optional)
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- To use eslint with this project, make sure to install eslint from terminal:
-  - `npm install -g eslint`
-- To use eslint to analyze this project use this command:
-  - `eslint main.ts`
-  - eslint will then create a report with suggestions for code improvement by file and line number.
-- If your source code is in a folder, such as `src`, you can use eslint with this command to analyze all files in that folder:
-  - `eslint .\src\`
+### عرض التذكيرات النشطة
+- استخدم الأمر "عرض التذكيرات النشطة"
+- أو انقر على عداد التذكيرات في شريط الحالة
 
-## Funding URL
+## API المطلوب
 
-You can include funding URLs where people who use your plugin can financially support it.
+يجب أن يدعم API الخاص بك النقطة التالية:
 
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
+```
+POST /process-url
+Content-Type: application/json
+Authorization: Bearer YOUR_API_PASSWORD
 
-```json
 {
-    "fundingUrl": "https://buymeacoffee.com"
+  "url": "https://example.com"
 }
 ```
 
-If you have multiple URLs, you can also do:
-
+الاستجابة المتوقعة:
 ```json
 {
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
+  "reminderTime": "2025-01-15T10:30:00Z",
+  "title": "عنوان الصفحة أو المحتوى"
 }
 ```
 
-## API Documentation
+## الأوامر المتاحة
 
-See https://github.com/obsidianmd/obsidian-api
+| الأمر | الوصف | اختصار لوحة المفاتيح |
+|-------|--------|---------------------|
+| إضافة تذكير من رابط | فتح نافذة إنشاء تذكير جديد | - |
+| عرض التذكيرات النشطة | عرض جميع التذكيرات الحالية | - |
+| إنشاء تذكير من النص المحدد | إنشاء تذكير من رابط في النص المحدد | - |
+
+## المساهمة
+
+نرحب بالمساهمات! يرجى:
+1. عمل Fork للمستودع
+2. إنشاء branch جديد للميزة
+3. إجراء التغييرات المطلوبة
+4. إرسال Pull Request
+
+## الدعم
+
+إذا واجهت أي مشاكل أو لديك اقتراحات:
+- افتح Issue في GitHub
+- راسلنا على البريد الإلكتروني
+- انضم إلى مجتمع Discord
+
+## الترخيص
+
+هذا المشروع مرخص تحت رخصة MIT - راجع ملف [LICENSE](LICENSE) للتفاصيل.
+
+## التحديثات القادمة
+
+- [ ] دعم تذكيرات متكررة
+- [ ] تصدير/استيراد التذكيرات
+- [ ] تكامل مع تقويم Obsidian
+- [ ] دعم قوالب التذكيرات المخصصة
+- [ ] إحصائيات متقدمة ورسوم بيانية
+
+---
+
+**ملاحظة**: تأكد من أن API الخاص بك يدعم CORS إذا كنت تستخدم Obsidian في المتصفح.

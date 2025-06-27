@@ -1,8 +1,230 @@
-/*
+/* تنسيقات Plugin التذكيرات */
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.reminder-plugin-ribbon-class {
+	color: var(--text-accent);
+}
 
-If your plugin does not need CSS, delete this file.
+.reminder-input-container {
+	margin-bottom: 15px;
+}
 
-*/
+.reminder-input-container label {
+	display: block;
+	margin-bottom: 5px;
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
+.reminder-url-input,
+.reminder-title-input,
+.reminder-time-input {
+	width: 100%;
+	padding: 8px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: 14px;
+}
+
+.reminder-url-input:focus,
+.reminder-title-input:focus,
+.reminder-time-input:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 2px var(--interactive-accent-hover);
+}
+
+.reminder-button-container {
+	display: flex;
+	gap: 10px;
+	justify-content: flex-end;
+	margin-top: 20px;
+}
+
+.reminder-button-container button {
+	padding: 8px 16px;
+	border: none;
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 14px;
+	transition: all 0.2s ease;
+}
+
+.reminder-button-container button:hover {
+	opacity: 0.8;
+}
+
+/* قائمة التذكيرات النشطة */
+.reminders-list {
+	max-height: 400px;
+	overflow-y: auto;
+}
+
+.reminder-item {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	padding: 15px;
+	margin-bottom: 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+}
+
+.reminder-info h3 {
+	margin: 0 0 8px 0;
+	color: var(--text-normal);
+	font-size: 16px;
+}
+
+.reminder-info p {
+	margin: 4px 0;
+	color: var(--text-muted);
+	font-size: 13px;
+	word-break: break-all;
+}
+
+.reminder-actions {
+	display: flex;
+	gap: 8px;
+	flex-shrink: 0;
+}
+
+.reminder-actions button {
+	padding: 6px 12px;
+	border: none;
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 12px;
+	white-space: nowrap;
+}
+
+/* نافذة إشعار التذكير */
+.reminder-notification-modal {
+	max-width: 500px;
+}
+
+.reminder-notification-header {
+	text-align: center;
+	margin-bottom: 20px;
+	padding-bottom: 15px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.reminder-notification-header h1 {
+	margin: 0;
+	color: var(--text-accent);
+	font-size: 24px;
+}
+
+.reminder-notification-content {
+	margin-bottom: 20px;
+}
+
+.reminder-notification-content h2 {
+	margin: 0 0 15px 0;
+	color: var(--text-normal);
+	font-size: 18px;
+}
+
+.reminder-notification-content p {
+	margin: 8px 0;
+	color: var(--text-muted);
+	font-size: 14px;
+	word-break: break-all;
+}
+
+.reminder-notification-actions {
+	display: flex;
+	gap: 10px;
+	justify-content: center;
+}
+
+.reminder-notification-actions button {
+	padding: 10px 20px;
+	border: none;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 14px;
+	font-weight: 500;
+	transition: all 0.2s ease;
+}
+
+.reminder-notification-actions button:hover {
+	transform: translateY(-1px);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* إحصائيات الإعدادات */
+.reminder-stats {
+	padding: 15px;
+	background: var(--background-secondary);
+	border-radius: 8px;
+	margin: 15px 0;
+}
+
+.reminder-stats p {
+	margin: 5px 0;
+	color: var(--text-normal);
+	font-size: 14px;
+}
+
+/* تحسينات الاستجابة */
+@media (max-width: 768px) {
+	.reminder-item {
+		flex-direction: column;
+		gap: 15px;
+	}
+	
+	.reminder-actions {
+		align-self: stretch;
+		justify-content: space-between;
+	}
+	
+	.reminder-notification-actions {
+		flex-direction: column;
+	}
+	
+	.reminder-button-container {
+		flex-direction: column;
+	}
+}
+
+/* تأثيرات بصرية إضافية */
+.reminder-item:hover {
+	background: var(--background-primary-alt);
+	transform: translateY(-1px);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+	transition: all 0.2s ease;
+}
+
+.reminder-notification-modal .modal-content {
+	animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+	from {
+		opacity: 0;
+		transform: translateY(-20px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+/* تنسيق الأزرار */
+button.mod-cta {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+button.mod-warning {
+	background: var(--color-red);
+	color: white;
+}
+
+button.mod-warning:hover {
+	background: var(--color-red-hover);
+}
