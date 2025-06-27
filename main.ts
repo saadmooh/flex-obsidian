@@ -1,5 +1,15 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, moment } from 'obsidian';
 
+// Import modal classes
+import { LinkReminderModal } from './src/modals/LinkReminderModal';
+import { ActiveRemindersModal } from './src/modals/ActiveRemindersModal';
+import { ReminderNotificationModal } from './src/modals/ReminderNotificationModal';
+import { ReminderStatsModal } from './src/modals/ReminderStatsModal';
+import { SearchRemindersModal } from './src/modals/SearchRemindersModal';
+
+// Import settings tab
+import { ReminderSettingTab } from './src/settings/ReminderSettingTab';
+
 interface ReminderPluginSettings {
 	apiBaseUrl: string;
 	apiPassword: string;
