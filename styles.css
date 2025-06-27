@@ -17,7 +17,8 @@
 
 .reminder-url-input,
 .reminder-title-input,
-.reminder-time-input {
+.reminder-time-input,
+.reminder-importance-select {
 	width: 100%;
 	padding: 8px 12px;
 	border: 1px solid var(--background-modifier-border);
@@ -29,7 +30,8 @@
 
 .reminder-url-input:focus,
 .reminder-title-input:focus,
-.reminder-time-input:focus {
+.reminder-time-input:focus,
+.reminder-importance-select:focus {
 	outline: none;
 	border-color: var(--interactive-accent);
 	box-shadow: 0 0 0 2px var(--interactive-accent-hover);
@@ -59,6 +61,7 @@
 .reminders-list {
 	max-height: 400px;
 	overflow-y: auto;
+	margin-bottom: 20px;
 }
 
 .reminder-item {
@@ -89,6 +92,7 @@
 	display: flex;
 	gap: 8px;
 	flex-shrink: 0;
+	flex-wrap: wrap;
 }
 
 .reminder-actions button {
@@ -139,6 +143,7 @@
 	display: flex;
 	gap: 10px;
 	justify-content: center;
+	flex-wrap: wrap;
 }
 
 .reminder-notification-actions button {
@@ -149,6 +154,7 @@
 	font-size: 14px;
 	font-weight: 500;
 	transition: all 0.2s ease;
+	margin: 5px;
 }
 
 .reminder-notification-actions button:hover {
@@ -168,6 +174,29 @@
 	margin: 5px 0;
 	color: var(--text-normal);
 	font-size: 14px;
+}
+
+/* زر المزامنة */
+.reminder-sync-container {
+	margin-top: 20px;
+	text-align: center;
+	padding-top: 15px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.reminder-sync-container button {
+	padding: 10px 20px;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border: none;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 14px;
+	transition: all 0.2s ease;
+}
+
+.reminder-sync-container button:hover {
+	opacity: 0.8;
 }
 
 /* تحسينات الاستجابة */
@@ -227,4 +256,24 @@ button.mod-warning {
 
 button.mod-warning:hover {
 	background: var(--color-red-hover);
+}
+
+/* تحسينات إضافية للأزرار */
+.reminder-actions button {
+	background: var(--background-primary);
+	color: var(--text-normal);
+	border: 1px solid var(--background-modifier-border);
+}
+
+.reminder-actions button:hover {
+	background: var(--background-modifier-hover);
+}
+
+.reminder-actions button:first-child {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.reminder-actions button:first-child:hover {
+	opacity: 0.8;
 }

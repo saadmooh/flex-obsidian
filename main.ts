@@ -5,13 +5,17 @@ interface ReminderPluginSettings {
 	apiPassword: string;
 	defaultReminderMinutes: number;
 	enableNotifications: boolean;
+	userTimezone: string;
+	language: string;
 }
 
 const DEFAULT_SETTINGS: ReminderPluginSettings = {
 	apiBaseUrl: 'https://flexreminder.com/api',
 	apiPassword: 'api_password_app',
 	defaultReminderMinutes: 5,
-	enableNotifications: true
+	enableNotifications: true,
+	userTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+	language: 'ar'
 }
 
 interface ReminderData {
@@ -20,6 +24,21 @@ interface ReminderData {
 	title: string;
 	reminderTime: Date;
 	isActive: boolean;
+	apiId?: number;
+	importance?: string;
+	category?: string;
+	complexity?: string;
+	domain?: string;
+}
+
+interface ApiResponse {
+	success: boolean;
+	message: string;
+	title?: string;
+	id?: number;
+	nextReminderTime?: string;
+	is_playlist?: boolean;
+	video_belongs_to_playlist?: boolean;
 }
 
 export default class ReminderPlugin extends Plugin {
@@ -80,11 +99,25 @@ export default class ReminderPlugin extends Plugin {
 			}
 		});
 
+		// إضافة أمر لمزامنة التذكيرات مع API
+		this.addCommand({
+			id: 'sync-reminders',
+			name: 'مزامنة التذكيرات مع الخادم',
+			callback: () => {
+				this.syncRemindersWithApi();
+			}
+		});
+
 		// إضافة تبويب الإعدادات
 		this.addSettingTab(new ReminderSettingTab(this.app, this));
 
 		// استعادة التذكيرات النشطة عند تحميل البرنامج
 		this.restoreActiveReminders();
+
+		// مزامنة دورية كل 30 دقيقة
+		this.registerInterval(window.setInterval(() => {
+			this.syncRemindersWithApi();
+		}, 30 * 60 * 1000));
 	}
 
 	onunload() {
@@ -112,15 +145,25 @@ export default class ReminderPlugin extends Plugin {
 		await this.saveData(data);
 	}
 
-	async sendUrlToApi(url: string): Promise<{ success: boolean; reminderTime?: string; title?: string; error?: string }> {
+	async sendUrlToApi(url: string, importance: string = 'day'): Promise<ApiResponse> {
 		try {
-			const response = await fetch(`${this.settings.apiBaseUrl}/process-url`, {
+			const timezoneOffset = new Date().getTimezoneOffset().toString();
+			
+			const response = await fetch(`${this.settings.apiBaseUrl}/savePost`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${this.settings.apiPassword}`
+					'Authorization': `Bearer ${this.settings.apiPassword}`,
+					'Accept': 'application/json'
 				},
-				body: JSON.stringify({ url })
+				body: JSON.stringify({ 
+					url,
+					importance_en: importance,
+					importance_ar: this.getImportanceArabic(importance),
+					timezone_offset: timezoneOffset,
+					timezone_name: this.settings.userTimezone,
+					api: 'obsidian'
+				})
 			});
 
 			if (!response.ok) {
@@ -128,28 +171,145 @@ export default class ReminderPlugin extends Plugin {
 			}
 
 			const data = await response.json();
-			return {
-				success: true,
-				reminderTime: data.reminderTime,
-				title: data.title || 'تذكير من رابط'
-			};
+			return data;
 		} catch (error) {
 			console.error('خطأ في إرسال الرابط إلى API:', error);
 			return {
 				success: false,
-				error: error instanceof Error ? error.message : 'خطأ غير معروف'
+				message: error instanceof Error ? error.message : 'خطأ غير معروف'
 			};
 		}
 	}
 
-	async createReminder(url: string, title: string, reminderTime: Date): Promise<string> {
+	async updateReminderTime(apiId: number, newTime: Date): Promise<boolean> {
+		try {
+			const timezoneOffset = new Date().getTimezoneOffset().toString();
+			
+			const response = await fetch(`${this.settings.apiBaseUrl}/updateReminder`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Authorization': `Bearer ${this.settings.apiPassword}`,
+					'Accept': 'application/json'
+				},
+				body: JSON.stringify({
+					id: apiId,
+					next_reminder_time: newTime.toISOString(),
+					timezone_offset: timezoneOffset,
+					timezone_name: this.settings.userTimezone
+				})
+			});
+
+			if (!response.ok) {
+				throw new Error(`HTTP error! status: ${response.status}`);
+			}
+
+			const data = await response.json();
+			return data.success;
+		} catch (error) {
+			console.error('خطأ في تحديث وقت التذكير:', error);
+			return false;
+		}
+	}
+
+	async deleteReminderFromApi(apiId: number): Promise<boolean> {
+		try {
+			const response = await fetch(`${this.settings.apiBaseUrl}/deleteReminder/${apiId}`, {
+				method: 'DELETE',
+				headers: {
+					'Authorization': `Bearer ${this.settings.apiPassword}`,
+					'Accept': 'application/json'
+				}
+			});
+
+			if (!response.ok) {
+				throw new Error(`HTTP error! status: ${response.status}`);
+			}
+
+			const data = await response.json();
+			return data.success;
+		} catch (error) {
+			console.error('خطأ في حذف التذكير من API:', error);
+			return false;
+		}
+	}
+
+	async syncRemindersWithApi(): Promise<void> {
+		try {
+			const response = await fetch(`${this.settings.apiBaseUrl}/getReminders`, {
+				method: 'GET',
+				headers: {
+					'Authorization': `Bearer ${this.settings.apiPassword}`,
+					'Accept': 'application/json'
+				}
+			});
+
+			if (!response.ok) {
+				throw new Error(`HTTP error! status: ${response.status}`);
+			}
+
+			const data = await response.json();
+			if (data.success && data.reminders) {
+				// تحديث التذكيرات المحلية بناءً على البيانات من الخادم
+				this.updateLocalRemindersFromApi(data.reminders);
+			}
+		} catch (error) {
+			console.error('خطأ في مزامنة التذكيرات:', error);
+		}
+	}
+
+	private updateLocalRemindersFromApi(apiReminders: any[]) {
+		// تحديث التذكيرات الموجودة وإضافة الجديدة
+		apiReminders.forEach(apiReminder => {
+			const existingIndex = this.reminderStorage.findIndex(r => r.apiId === apiReminder.id);
+			
+			if (existingIndex !== -1) {
+				// تحديث التذكير الموجود
+				this.reminderStorage[existingIndex].reminderTime = new Date(apiReminder.next_reminder_time);
+				this.reminderStorage[existingIndex].title = apiReminder.title;
+				this.reminderStorage[existingIndex].category = apiReminder.category;
+				this.reminderStorage[existingIndex].complexity = apiReminder.complexity;
+				this.reminderStorage[existingIndex].domain = apiReminder.domain;
+			} else {
+				// إضافة تذكير جديد
+				const newReminder: ReminderData = {
+					id: this.generateId(),
+					url: apiReminder.url,
+					title: apiReminder.title,
+					reminderTime: new Date(apiReminder.next_reminder_time),
+					isActive: true,
+					apiId: apiReminder.id,
+					importance: apiReminder.importance,
+					category: apiReminder.category,
+					complexity: apiReminder.complexity,
+					domain: apiReminder.domain
+				};
+				this.reminderStorage.push(newReminder);
+			}
+		});
+
+		this.saveReminders();
+		this.restoreActiveReminders();
+	}
+
+	async createReminder(url: string, title: string, reminderTime: Date, importance: string = 'day'): Promise<string> {
 		const reminderId = this.generateId();
+		
+		// إرسال إلى API أولاً
+		const apiResponse = await this.sendUrlToApi(url, importance);
+		
+		if (!apiResponse.success) {
+			throw new Error(apiResponse.message || 'فشل في إنشاء التذكير على الخادم');
+		}
+
 		const reminderData: ReminderData = {
 			id: reminderId,
 			url,
-			title,
-			reminderTime,
-			isActive: true
+			title: apiResponse.title || title,
+			reminderTime: apiResponse.nextReminderTime ? new Date(apiResponse.nextReminderTime) : reminderTime,
+			isActive: true,
+			apiId: apiResponse.id,
+			importance
 		};
 
 		this.reminderStorage.push(reminderData);
@@ -157,7 +317,7 @@ export default class ReminderPlugin extends Plugin {
 
 		// حساب الوقت المتبقي للتذكير
 		const now = new Date();
-		const timeUntilReminder = reminderTime.getTime() - now.getTime();
+		const timeUntilReminder = reminderData.reminderTime.getTime() - now.getTime();
 
 		if (timeUntilReminder > 0) {
 			const timeout = setTimeout(() => {
@@ -189,11 +349,17 @@ export default class ReminderPlugin extends Plugin {
 		}
 	}
 
-	cancelReminder(reminderId: string) {
+	async cancelReminder(reminderId: string) {
 		const timeout = this.activeReminders.get(reminderId);
 		if (timeout) {
 			clearTimeout(timeout);
 			this.activeReminders.delete(reminderId);
+		}
+
+		// العثور على التذكير وحذفه من API
+		const reminder = this.reminderStorage.find(r => r.id === reminderId);
+		if (reminder && reminder.apiId) {
+			await this.deleteReminderFromApi(reminder.apiId);
 		}
 
 		// تحديث حالة التذكير في التخزين
@@ -204,11 +370,47 @@ export default class ReminderPlugin extends Plugin {
 		}
 	}
 
+	async snoozeReminder(reminder: ReminderData, minutes: number = 5) {
+		const snoozeTime = new Date(Date.now() + minutes * 60 * 1000);
+		
+		if (reminder.apiId) {
+			const success = await this.updateReminderTime(reminder.apiId, snoozeTime);
+			if (!success) {
+				new Notice('فشل في تأجيل التذكير على الخادم');
+				return;
+			}
+		}
+
+		// إنشاء تذكير محلي جديد
+		const newReminderId = this.generateId();
+		const newReminder: ReminderData = {
+			...reminder,
+			id: newReminderId,
+			reminderTime: snoozeTime,
+			isActive: true
+		};
+
+		this.reminderStorage.push(newReminder);
+		await this.saveReminders();
+
+		const timeUntilReminder = snoozeTime.getTime() - Date.now();
+		const timeout = setTimeout(() => {
+			this.triggerReminder(newReminder);
+		}, timeUntilReminder);
+
+		this.activeReminders.set(newReminderId, timeout);
+		new Notice(`تم تأجيل التذكير لمدة ${minutes} دقيقة`);
+	}
+
 	getActiveReminders(): ReminderData[] {
 		return this.reminderStorage.filter(r => r.isActive);
 	}
 
 	private restoreActiveReminders() {
+		// إلغاء التذكيرات النشطة الحالية
+		this.activeReminders.forEach(timeout => clearTimeout(timeout));
+		this.activeReminders.clear();
+
 		const now = new Date();
 		this.reminderStorage.forEach(reminder => {
 			if (reminder.isActive && new Date(reminder.reminderTime) > now) {
@@ -232,6 +434,15 @@ export default class ReminderPlugin extends Plugin {
 
 	private generateId(): string {
 		return Math.random().toString(36).substr(2, 9);
+	}
+
+	private getImportanceArabic(importance: string): string {
+		const importanceMap: { [key: string]: string } = {
+			'day': 'يوم',
+			'week': 'أسبوع',
+			'month': 'شهر'
+		};
+		return importanceMap[importance] || 'يوم';
 	}
 }
 
@@ -270,6 +481,25 @@ class LinkReminderModal extends Modal {
 		});
 		titleInput.addClass('reminder-title-input');
 
+		// حقل الأهمية
+		const importanceContainer = contentEl.createDiv('reminder-input-container');
+		importanceContainer.createEl('label', { text: 'الأهمية:' });
+		const importanceSelect = importanceContainer.createEl('select');
+		importanceSelect.addClass('reminder-importance-select');
+		
+		const importanceOptions = [
+			{ value: 'day', text: 'يومي' },
+			{ value: 'week', text: 'أسبوعي' },
+			{ value: 'month', text: 'شهري' }
+		];
+		
+		importanceOptions.forEach(option => {
+			const optionEl = importanceSelect.createEl('option', { 
+				value: option.value, 
+				text: option.text 
+			});
+		});
+
 		// حقل الوقت المخصص (اختياري)
 		const timeContainer = contentEl.createDiv('reminder-input-container');
 		timeContainer.createEl('label', { text: 'وقت مخصص (اختياري):' });
@@ -284,7 +514,12 @@ class LinkReminderModal extends Modal {
 		const createButton = buttonContainer.createEl('button', { text: 'إنشاء تذكير' });
 		createButton.addClass('mod-cta');
 		createButton.onclick = async () => {
-			await this.handleCreateReminder(urlInput.value, titleInput.value, timeInput.value);
+			await this.handleCreateReminder(
+				urlInput.value, 
+				titleInput.value, 
+				timeInput.value,
+				importanceSelect.value
+			);
 		};
 
 		const cancelButton = buttonContainer.createEl('button', { text: 'إلغاء' });
@@ -294,7 +529,7 @@ class LinkReminderModal extends Modal {
 		urlInput.focus();
 	}
 
-	async handleCreateReminder(url: string, customTitle: string, customTime: string) {
+	async handleCreateReminder(url: string, customTitle: string, customTime: string, importance: string) {
 		if (!url.trim()) {
 			new Notice('يرجى إدخال رابط صحيح');
 			return;
@@ -319,28 +554,26 @@ class LinkReminderModal extends Modal {
 				// استخدام الوقت المخصص
 				reminderTime = new Date(customTime);
 				title = customTitle || 'تذكير مخصص';
-			} else {
-				// إرسال الرابط إلى API
-				const apiResponse = await this.plugin.sendUrlToApi(url);
 				
-				if (!apiResponse.success) {
-					throw new Error(apiResponse.error || 'فشل في معالجة الرابط');
+				// التحقق من أن الوقت في المستقبل
+				if (reminderTime <= new Date()) {
+					throw new Error('وقت التذكير يجب أن يكون في المستقبل');
 				}
 
-				reminderTime = new Date(apiResponse.reminderTime!);
-				title = customTitle || apiResponse.title || 'تذكير من رابط';
+				// إنشاء التذكير مع الوقت المخصص
+				const reminderId = await this.plugin.createReminder(url, title, reminderTime, importance);
+			} else {
+				// إنشاء التذكير باستخدام API
+				const reminderId = await this.plugin.createReminder(
+					url, 
+					customTitle || 'تذكير من رابط', 
+					new Date(), 
+					importance
+				);
 			}
-
-			// التحقق من أن الوقت في المستقبل
-			if (reminderTime <= new Date()) {
-				throw new Error('وقت التذكير يجب أن يكون في المستقبل');
-			}
-
-			// إنشاء التذكير
-			const reminderId = await this.plugin.createReminder(url, title, reminderTime);
 
 			loadingNotice.hide();
-			new Notice(`تم إنشاء التذكير بنجاح! سيتم تذكيرك في ${reminderTime.toLocaleString('ar')}`);
+			new Notice('تم إنشاء التذكير بنجاح!');
 			
 			this.close();
 		} catch (error) {
@@ -373,6 +606,18 @@ class ActiveRemindersModal extends Modal {
 
 		if (activeReminders.length === 0) {
 			contentEl.createEl('p', { text: 'لا توجد تذكيرات نشطة حالياً' });
+			
+			// زر لمزامنة التذكيرات
+			const syncButton = contentEl.createEl('button', { text: 'مزامنة مع الخادم' });
+			syncButton.addClass('mod-cta');
+			syncButton.onclick = async () => {
+				const loadingNotice = new Notice('جاري المزامنة...', 0);
+				await this.plugin.syncRemindersWithApi();
+				loadingNotice.hide();
+				new Notice('تم تحديث التذكيرات');
+				this.onOpen(); // إعادة تحديث القائمة
+			};
+			
 			return;
 		}
 
@@ -385,6 +630,14 @@ class ActiveRemindersModal extends Modal {
 			reminderInfo.createEl('h3', { text: reminder.title });
 			reminderInfo.createEl('p', { text: `الرابط: ${reminder.url}` });
 			reminderInfo.createEl('p', { text: `الوقت: ${new Date(reminder.reminderTime).toLocaleString('ar')}` });
+			
+			if (reminder.importance) {
+				reminderInfo.createEl('p', { text: `الأهمية: ${this.plugin.getImportanceArabic(reminder.importance)}` });
+			}
+			
+			if (reminder.category) {
+				reminderInfo.createEl('p', { text: `الفئة: ${reminder.category}` });
+			}
 
 			const reminderActions = reminderItem.createDiv('reminder-actions');
 			
@@ -393,14 +646,31 @@ class ActiveRemindersModal extends Modal {
 				window.open(reminder.url, '_blank');
 			};
 
+			const snoozeButton = reminderActions.createEl('button', { text: 'تأجيل 5 دقائق' });
+			snoozeButton.onclick = async () => {
+				await this.plugin.snoozeReminder(reminder, 5);
+				this.onOpen(); // إعادة تحديث القائمة
+			};
+
 			const cancelButton = reminderActions.createEl('button', { text: 'إلغاء التذكير' });
 			cancelButton.addClass('mod-warning');
-			cancelButton.onclick = () => {
-				this.plugin.cancelReminder(reminder.id);
+			cancelButton.onclick = async () => {
+				await this.plugin.cancelReminder(reminder.id);
 				new Notice('تم إلغاء التذكير');
 				this.onOpen(); // إعادة تحديث القائمة
 			};
 		});
+
+		// زر مزامنة في الأسفل
+		const syncContainer = contentEl.createDiv('reminder-sync-container');
+		const syncButton = syncContainer.createEl('button', { text: 'مزامنة مع الخادم' });
+		syncButton.onclick = async () => {
+			const loadingNotice = new Notice('جاري المزامنة...', 0);
+			await this.plugin.syncRemindersWithApi();
+			loadingNotice.hide();
+			new Notice('تم تحديث التذكيرات');
+			this.onOpen(); // إعادة تحديث القائمة
+		};
 	}
 
 	onClose() {
@@ -432,6 +702,14 @@ class ReminderNotificationModal extends Modal {
 		content.createEl('h2', { text: this.reminder.title });
 		content.createEl('p', { text: `الرابط: ${this.reminder.url}` });
 		content.createEl('p', { text: `الوقت: ${new Date(this.reminder.reminderTime).toLocaleString('ar')}` });
+		
+		if (this.reminder.category) {
+			content.createEl('p', { text: `الفئة: ${this.reminder.category}` });
+		}
+		
+		if (this.reminder.complexity) {
+			content.createEl('p', { text: `التعقيد: ${this.reminder.complexity}` });
+		}
 
 		const actions = contentEl.createDiv('reminder-notification-actions');
 		
@@ -442,11 +720,21 @@ class ReminderNotificationModal extends Modal {
 			this.close();
 		};
 
-		const snoozeButton = actions.createEl('button', { text: 'تأجيل 5 دقائق' });
-		snoozeButton.onclick = () => {
-			const snoozeTime = new Date(Date.now() + 5 * 60 * 1000);
-			this.plugin.createReminder(this.reminder.url, this.reminder.title, snoozeTime);
-			new Notice('تم تأجيل التذكير لمدة 5 دقائق');
+		const snooze5Button = actions.createEl('button', { text: 'تأجيل 5 دقائق' });
+		snooze5Button.onclick = async () => {
+			await this.plugin.snoozeReminder(this.reminder, 5);
+			this.close();
+		};
+
+		const snooze15Button = actions.createEl('button', { text: 'تأجيل 15 دقيقة' });
+		snooze15Button.onclick = async () => {
+			await this.plugin.snoozeReminder(this.reminder, 15);
+			this.close();
+		};
+
+		const snooze60Button = actions.createEl('button', { text: 'تأجيل ساعة' });
+		snooze60Button.onclick = async () => {
+			await this.plugin.snoozeReminder(this.reminder, 60);
 			this.close();
 		};
 
@@ -499,6 +787,30 @@ class ReminderSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
+			.setName('المنطقة الزمنية')
+			.setDesc('المنطقة الزمنية الخاصة بك')
+			.addText(text => text
+				.setPlaceholder('Asia/Riyadh')
+				.setValue(this.plugin.settings.userTimezone)
+				.onChange(async (value) => {
+					this.plugin.settings.userTimezone = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('اللغة')
+			.setDesc('لغة واجهة التطبيق')
+			.addDropdown(dropdown => dropdown
+				.addOption('ar', 'العربية')
+				.addOption('en', 'English')
+				.addOption('zh', '中文')
+				.setValue(this.plugin.settings.language)
+				.onChange(async (value) => {
+					this.plugin.settings.language = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
 			.setName('تفعيل الإشعارات')
 			.setDesc('عرض إشعارات عند تفعيل التذكيرات')
 			.addToggle(toggle => toggle
@@ -530,6 +842,20 @@ class ReminderSettingTab extends PluginSettingTab {
 		statsContainer.createEl('p', { text: `التذكيرات النشطة: ${activeReminders.length}` });
 		statsContainer.createEl('p', { text: `إجمالي التذكيرات: ${totalReminders}` });
 
+		// زر مزامنة التذكيرات
+		new Setting(containerEl)
+			.setName('مزامنة التذكيرات')
+			.setDesc('مزامنة التذكيرات مع الخادم')
+			.addButton(button => button
+				.setButtonText('مزامنة الآن')
+				.onClick(async () => {
+					const loadingNotice = new Notice('جاري المزامنة...', 0);
+					await this.plugin.syncRemindersWithApi();
+					loadingNotice.hide();
+					new Notice('تم تحديث التذكيرات');
+					this.display(); // إعادة تحديث الصفحة
+				}));
+
 		// زر مسح جميع التذكيرات
 		new Setting(containerEl)
 			.setName('مسح جميع التذكيرات')
@@ -539,6 +865,14 @@ class ReminderSettingTab extends PluginSettingTab {
 				.setWarning()
 				.onClick(async () => {
 					if (confirm('هل أنت متأكد من حذف جميع التذكيرات؟ لا يمكن التراجع عن هذا الإجراء.')) {
+						// حذف من API أولاً
+						for (const reminder of this.plugin.reminderStorage) {
+							if (reminder.apiId) {
+								await this.plugin.deleteReminderFromApi(reminder.apiId);
+							}
+						}
+						
+						// حذف محلياً
 						this.plugin.activeReminders.forEach(timeout => clearTimeout(timeout));
 						this.plugin.activeReminders.clear();
 						this.plugin.reminderStorage = [];
