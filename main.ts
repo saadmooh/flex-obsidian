@@ -264,7 +264,7 @@ export default class ReminderPlugin extends Plugin {
 		try {
 			const timezoneOffset = new Date().getTimezoneOffset().toString();
 			
-			const data = await this.makeApiRequest('savePost', 'POST', {
+			const data = await this.makeApiRequest('save-post', 'POST', {
 				url,
 				importance_en: importance,
 				importance_ar: this.getImportanceArabic(importance),
@@ -287,7 +287,7 @@ export default class ReminderPlugin extends Plugin {
 		try {
 			const timezoneOffset = new Date().getTimezoneOffset().toString();
 			
-			const data = await this.makeApiRequest('updateReminder', 'POST', {
+			const data = await this.makeApiRequest('update-reminder', 'POST', {
 				id: apiId,
 				next_reminder_time: newTime.toISOString(),
 				timezone_offset: timezoneOffset,
@@ -303,7 +303,7 @@ export default class ReminderPlugin extends Plugin {
 
 	async deleteReminderFromApi(apiId: number): Promise<boolean> {
 		try {
-			const data = await this.makeApiRequest(`deleteReminder/${apiId}`, 'DELETE');
+			const data = await this.makeApiRequest(`deleteReminder/${apiId}`, 'GET');
 			return data.success;
 		} catch (error) {
 			console.error('خطأ في حذف التذكير من API:', error);
@@ -320,7 +320,7 @@ export default class ReminderPlugin extends Plugin {
 		this.updateStatusBar();
 
 		try {
-			const data = await this.makeApiRequest('getReminders');
+			const data = await this.makeApiRequest('reminders');
 			
 			if (data.success && data.reminders) {
 				this.updateLocalRemindersFromApi(data.reminders);
@@ -644,7 +644,7 @@ export default class ReminderPlugin extends Plugin {
 
 	private async checkConnectivity() {
 		try {
-			await this.makeApiRequest('getUser');
+			await this.makeApiRequest('user');
 			this.syncStatus.isOnline = true;
 		} catch (error) {
 			this.syncStatus.isOnline = false;
@@ -656,7 +656,7 @@ export default class ReminderPlugin extends Plugin {
 		return Math.random().toString(36).substr(2, 9);
 	}
 
-	private getImportanceArabic(importance: string): string {
+	getImportanceArabic(importance: string): string {
 		const importanceMap: { [key: string]: string } = {
 			'day': 'يوم',
 			'week': 'أسبوع',
@@ -666,4 +666,4 @@ export default class ReminderPlugin extends Plugin {
 	}
 }
 
-// باقي الكلاسات ستكون في الملفات التالية...
+export { ReminderData };

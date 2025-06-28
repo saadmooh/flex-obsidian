@@ -122,7 +122,7 @@ export class LinkReminderModal extends Modal {
 
 		try {
 			// محاولة الحصول على معلومات الرابط من API
-			const response = await this.plugin.makeApiRequest('getReminder', 'POST', { url });
+			const response = await this.plugin.makeApiRequest('reminder', 'GET', { url });
 			
 			if (response.success && response.reminder) {
 				const reminder = response.reminder;
