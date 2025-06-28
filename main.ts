@@ -220,7 +220,7 @@ export default class ReminderPlugin extends Plugin {
 		await this.saveData(data);
 	}
 
-	private async makeApiRequest(endpoint: string, method: string = 'GET', body?: any): Promise<any> {
+	async makeApiRequest(endpoint: string, method: string = 'GET', body?: any): Promise<any> {
 		const maxRetries = this.settings.maxRetries;
 		let lastError: Error | null = null;
 
@@ -258,29 +258,6 @@ export default class ReminderPlugin extends Plugin {
 		}
 
 		throw lastError || new Error('فشل في الاتصال بالخادم');
-	}
-
-	async sendUrlToApi(url: string, importance: string = 'day'): Promise<ApiResponse> {
-		try {
-			const timezoneOffset = new Date().getTimezoneOffset().toString();
-			
-			const data = await this.makeApiRequest('save-post', 'POST', {
-				url,
-				importance_en: importance,
-				importance_ar: this.getImportanceArabic(importance),
-				timezone_offset: timezoneOffset,
-				timezone_name: this.settings.userTimezone,
-				api: 'obsidian'
-			});
-
-			return data;
-		} catch (error) {
-			console.error('خطأ في إرسال الرابط إلى API:', error);
-			return {
-				success: false,
-				message: error instanceof Error ? error.message : 'خطأ غير معروف'
-			};
-		}
 	}
 
 	async updateReminderTime(apiId: number, newTime: Date): Promise<boolean> {
@@ -403,53 +380,6 @@ export default class ReminderPlugin extends Plugin {
 
 		this.saveReminders();
 		this.restoreActiveReminders();
-	}
-
-	async createReminder(url: string, title: string, reminderTime: Date, importance: string = 'day'): Promise<string> {
-		const reminderId = this.generateId();
-		
-		// إرسال إلى API أولاً
-		const apiResponse = await this.sendUrlToApi(url, importance);
-		
-		if (!apiResponse.success) {
-			throw new Error(apiResponse.message || 'فشل في إنشاء التذكير على الخادم');
-		}
-
-		const reminderData: ReminderData = {
-			id: reminderId,
-			url,
-			title: apiResponse.title || title,
-			reminderTime: apiResponse.nextReminderTime ? new Date(apiResponse.nextReminderTime) : reminderTime,
-			isActive: true,
-			apiId: apiResponse.id,
-			importance,
-			category: apiResponse.category,
-			complexity: apiResponse.complexity,
-			domain: apiResponse.domain,
-			content: apiResponse.content,
-			imageUrl: apiResponse.image_url,
-			preferredTimes: apiResponse.preferred_times,
-			createdAt: new Date(),
-			lastSynced: new Date()
-		};
-
-		this.reminderStorage.push(reminderData);
-		await this.saveReminders();
-
-		// حساب الوقت المتبقي للتذكير
-		const now = new Date();
-		const timeUntilReminder = reminderData.reminderTime.getTime() - now.getTime();
-
-		if (timeUntilReminder > 0) {
-			const timeout = setTimeout(() => {
-				this.triggerReminder(reminderData);
-			}, timeUntilReminder);
-
-			this.activeReminders.set(reminderId, timeout);
-		}
-
-		this.updateStatusBar();
-		return reminderId;
 	}
 
 	triggerReminder(reminder: ReminderData) {
@@ -614,7 +544,7 @@ export default class ReminderPlugin extends Plugin {
 		this.updateStatusBar();
 	}
 
-	private updateStatusBar() {
+	updateStatusBar() {
 		if (!this.statusBarItem) return;
 
 		const activeCount = this.getActiveReminders().length;
@@ -627,7 +557,7 @@ export default class ReminderPlugin extends Plugin {
 		setTimeout(() => this.updateStatusBar(), 60000);
 	}
 
-	private startAutoSync() {
+	startAutoSync() {
 		if (!this.settings.enableAutoSync) return;
 
 		this.syncInterval = window.setInterval(() => {
@@ -635,7 +565,7 @@ export default class ReminderPlugin extends Plugin {
 		}, this.settings.syncIntervalMinutes * 60 * 1000);
 	}
 
-	private stopAutoSync() {
+	stopAutoSync() {
 		if (this.syncInterval) {
 			window.clearInterval(this.syncInterval);
 			this.syncInterval = null;

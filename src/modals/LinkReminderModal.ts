@@ -27,15 +27,6 @@ export class LinkReminderModal extends Modal {
 		});
 		urlInput.addClass('reminder-url-input');
 
-		// حقل العنوان (اختياري)
-		const titleContainer = contentEl.createDiv('reminder-input-container');
-		titleContainer.createEl('label', { text: 'العنوان (اختياري):' });
-		const titleInput = titleContainer.createEl('input', {
-			type: 'text',
-			placeholder: 'عنوان التذكير'
-		});
-		titleInput.addClass('reminder-title-input');
-
 		// حقل الأهمية
 		const importanceContainer = contentEl.createDiv('reminder-input-container');
 		importanceContainer.createEl('label', { text: 'الأهمية:' });
@@ -55,19 +46,6 @@ export class LinkReminderModal extends Modal {
 			});
 		});
 
-		// حقل الوقت المخصص (اختياري)
-		const timeContainer = contentEl.createDiv('reminder-input-container');
-		timeContainer.createEl('label', { text: 'وقت مخصص (اختياري):' });
-		const timeInput = timeContainer.createEl('input', {
-			type: 'datetime-local'
-		});
-		timeInput.addClass('reminder-time-input');
-
-		// معاينة الرابط
-		const previewContainer = contentEl.createDiv('reminder-preview-container');
-		const previewButton = previewContainer.createEl('button', { text: 'معاينة الرابط' });
-		previewButton.onclick = () => this.previewUrl(urlInput.value, previewContainer);
-
 		// أزرار العمل
 		const buttonContainer = contentEl.createDiv('reminder-button-container');
 		
@@ -76,8 +54,6 @@ export class LinkReminderModal extends Modal {
 		createButton.onclick = async () => {
 			await this.handleCreateReminder(
 				urlInput.value, 
-				titleInput.value, 
-				timeInput.value,
 				importanceSelect.value
 			);
 		};
@@ -96,65 +72,7 @@ export class LinkReminderModal extends Modal {
 		});
 	}
 
-	private async previewUrl(url: string, container: HTMLElement) {
-		if (!url.trim()) {
-			new Notice('يرجى إدخال رابط صحيح');
-			return;
-		}
-
-		try {
-			new URL(url);
-		} catch {
-			new Notice('الرابط المدخل غير صحيح');
-			return;
-		}
-
-		// إزالة المعاينة السابقة
-		const existingPreview = container.querySelector('.url-preview');
-		if (existingPreview) {
-			existingPreview.remove();
-		}
-
-		const previewEl = container.createDiv('url-preview');
-		previewEl.innerHTML = `
-			<div class="preview-loading">جاري تحميل المعاينة...</div>
-		`;
-
-		try {
-			// محاولة الحصول على معلومات الرابط من API
-			const response = await this.plugin.makeApiRequest('reminder', 'GET', { url });
-			
-			if (response.success && response.reminder) {
-				const reminder = response.reminder;
-				previewEl.innerHTML = `
-					<div class="preview-content">
-						<h4>${reminder.title || 'بدون عنوان'}</h4>
-						${reminder.image_url ? `<img src="${reminder.image_url}" alt="صورة المعاينة" style="max-width: 200px; max-height: 150px;">` : ''}
-						<p><strong>الفئة:</strong> ${reminder.category || 'غير محدد'}</p>
-						<p><strong>التعقيد:</strong> ${reminder.complexity || 'غير محدد'}</p>
-						<p><strong>المجال:</strong> ${reminder.domain || 'غير محدد'}</p>
-						${reminder.content ? `<p><strong>الوصف:</strong> ${reminder.content.substring(0, 100)}...</p>` : ''}
-					</div>
-				`;
-			} else {
-				previewEl.innerHTML = `
-					<div class="preview-error">
-						<p>لا يمكن تحميل معاينة الرابط</p>
-						<p>سيتم إنشاء التذكير بالعنوان المخصص</p>
-					</div>
-				`;
-			}
-		} catch (error) {
-			previewEl.innerHTML = `
-				<div class="preview-error">
-					<p>خطأ في تحميل المعاينة</p>
-					<p>تحقق من الاتصال بالإنترنت</p>
-				</div>
-			`;
-		}
-	}
-
-	async handleCreateReminder(url: string, customTitle: string, customTime: string, importance: string) {
+	async handleCreateReminder(url: string, importance: string) {
 		if (!url.trim()) {
 			new Notice('يرجى إدخال رابط صحيح');
 			return;
@@ -172,30 +90,59 @@ export class LinkReminderModal extends Modal {
 		const loadingNotice = new Notice('جاري معالجة الرابط...', 0);
 
 		try {
-			let reminderTime: Date;
-			let title: string;
+			// إرسال الرابط إلى API
+			const timezoneOffset = new Date().getTimezoneOffset().toString();
+			
+			const data = await this.plugin.makeApiRequest('save-post', 'POST', {
+				url: url,
+				importance_en: importance,
+				importance_ar: this.plugin.getImportanceArabic(importance),
+				playlist_url: null,
+				api: 'obsidian',
+				timezone_offset: timezoneOffset,
+				timezone_name: this.plugin.settings.userTimezone
+			});
 
-			if (customTime) {
-				// استخدام الوقت المخصص
-				reminderTime = new Date(customTime);
-				title = customTitle || 'تذكير مخصص';
-				
-				// التحقق من أن الوقت في المستقبل
-				if (reminderTime <= new Date()) {
-					throw new Error('وقت التذكير يجب أن يكون في المستقبل');
-				}
-
-				// إنشاء التذكير مع الوقت المخصص
-				const reminderId = await this.plugin.createReminder(url, title, reminderTime, importance);
-			} else {
-				// إنشاء التذكير باستخدام API
-				const reminderId = await this.plugin.createReminder(
-					url, 
-					customTitle || 'تذكير من رابط', 
-					new Date(), 
-					importance
-				);
+			if (!data.success) {
+				throw new Error(data.message || 'فشل في إنشاء التذكير على الخادم');
 			}
+
+			// إنشاء التذكير المحلي
+			const reminderId = this.generateId();
+			const reminderData = {
+				id: reminderId,
+				url: url,
+				title: data.title || 'تذكير من رابط',
+				reminderTime: data.nextReminderTime ? new Date(data.nextReminderTime) : new Date(Date.now() + 5 * 60 * 1000),
+				isActive: true,
+				apiId: data.id,
+				importance: importance,
+				category: data.category,
+				complexity: data.complexity,
+				domain: data.domain,
+				content: data.content,
+				imageUrl: data.image_url,
+				preferredTimes: data.preferred_times,
+				createdAt: new Date(),
+				lastSynced: new Date()
+			};
+
+			this.plugin.reminderStorage.push(reminderData);
+			await this.plugin.saveReminders();
+
+			// حساب الوقت المتبقي للتذكير
+			const now = new Date();
+			const timeUntilReminder = reminderData.reminderTime.getTime() - now.getTime();
+
+			if (timeUntilReminder > 0) {
+				const timeout = setTimeout(() => {
+					this.plugin.triggerReminder(reminderData);
+				}, timeUntilReminder);
+
+				this.plugin.activeReminders.set(reminderId, timeout);
+			}
+
+			this.plugin.updateStatusBar();
 
 			loadingNotice.hide();
 			new Notice('تم إنشاء التذكير بنجاح!');
@@ -205,6 +152,10 @@ export class LinkReminderModal extends Modal {
 			loadingNotice.hide();
 			new Notice(`خطأ: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
 		}
+	}
+
+	private generateId(): string {
+		return Math.random().toString(36).substr(2, 9);
 	}
 
 	onClose() {
