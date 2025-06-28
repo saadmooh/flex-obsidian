@@ -1,5 +1,5 @@
 import { App, Modal, Notice } from 'obsidian';
-import ReminderPlugin from '../main';
+import ReminderPlugin from '../../main';
 
 export class LinkReminderModal extends Modal {
 	plugin: ReminderPlugin;
@@ -14,12 +14,17 @@ export class LinkReminderModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.empty();
+		contentEl.addClass('reminder-modal');
 
-		contentEl.createEl('h2', { text: 'إضافة تذكير من رابط' });
+		// العنوان
+		const header = contentEl.createEl('h2', { text: 'إضافة تذكير من رابط' });
+		header.addClass('reminder-modal-title');
 
 		// حقل إدخال الرابط
 		const urlContainer = contentEl.createDiv('reminder-input-container');
-		urlContainer.createEl('label', { text: 'الرابط:' });
+		const urlLabel = urlContainer.createEl('label', { text: 'الرابط:' });
+		urlLabel.addClass('reminder-label');
+		
 		const urlInput = urlContainer.createEl('input', {
 			type: 'text',
 			placeholder: 'https://example.com',
@@ -29,7 +34,9 @@ export class LinkReminderModal extends Modal {
 
 		// حقل الأهمية
 		const importanceContainer = contentEl.createDiv('reminder-input-container');
-		importanceContainer.createEl('label', { text: 'الأهمية:' });
+		const importanceLabel = importanceContainer.createEl('label', { text: 'الأهمية:' });
+		importanceLabel.addClass('reminder-label');
+		
 		const importanceSelect = importanceContainer.createEl('select');
 		importanceSelect.addClass('reminder-importance-select');
 		
@@ -40,7 +47,7 @@ export class LinkReminderModal extends Modal {
 		];
 		
 		importanceOptions.forEach(option => {
-			const optionEl = importanceSelect.createEl('option', { 
+			importanceSelect.createEl('option', { 
 				value: option.value, 
 				text: option.text 
 			});
@@ -53,7 +60,7 @@ export class LinkReminderModal extends Modal {
 		createButton.addClass('mod-cta');
 		createButton.onclick = async () => {
 			await this.handleCreateReminder(
-				urlInput.value, 
+				urlInput.value.trim(), 
 				importanceSelect.value
 			);
 		};
@@ -62,18 +69,26 @@ export class LinkReminderModal extends Modal {
 		cancelButton.onclick = () => this.close();
 
 		// التركيز على حقل الرابط
-		urlInput.focus();
+		setTimeout(() => {
+			urlInput.focus();
+		}, 100);
 
 		// إضافة مستمع للضغط على Enter
 		urlInput.addEventListener('keypress', (e) => {
 			if (e.key === 'Enter') {
+				e.preventDefault();
 				createButton.click();
 			}
+		});
+
+		// إضافة مستمع للضغط على Escape
+		this.scope.register([], 'Escape', () => {
+			this.close();
 		});
 	}
 
 	async handleCreateReminder(url: string, importance: string) {
-		if (!url.trim()) {
+		if (!url) {
 			new Notice('يرجى إدخال رابط صحيح');
 			return;
 		}
@@ -150,6 +165,7 @@ export class LinkReminderModal extends Modal {
 			this.close();
 		} catch (error) {
 			loadingNotice.hide();
+			console.error('خطأ في إنشاء التذكير:', error);
 			new Notice(`خطأ: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
 		}
 	}
